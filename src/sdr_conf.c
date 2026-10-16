@@ -43,7 +43,7 @@ static const reg_t MAX2771_field[] = { // MAX2771 register field definitions
     // field          ,addr,nbit,pos, fix[],  val[], desc
     {"CHIPEN"         , 0x0,  1, 31, {1, 1}, {1, 1}, "Chip enable (0:disable,1:enable)"},
     {"IDLE"           , 0x0,  1, 30, {1, 1}, {0, 0}, "Idle enable (0:operating-mode,1:idle-mode)"},
-    {"MIXPOLE"        , 0x0,  1, 17, {1, 1}, {0, 0}, "Mixer pole selection (0:13MHz,1:36MHz)"},
+    {"MIXPOLE"        , 0x0,  1, 17, {1, 1}, {1, 1}, "Mixer pole selection (0:13MHz,1:36MHz)"},
     {"LNAMODE"        , 0x0,  2, 15, {0, 0}, {0, 1}, "LNA mode selection (0:high-band,1:low-band,2:disable)"},
     {"MIXERMODE"      , 0x0,  2, 13, {0, 0}, {0, 1}, "Mixer mode selection (0:high-band,1:low-band,2:disable)"},
     {"FCEN"           , 0x0,  7,  6, {0, 0}, {0, 0}, "IF filter center frequency: (128-FCEN)/2*{0.195|0.66|0.355} MHz"},

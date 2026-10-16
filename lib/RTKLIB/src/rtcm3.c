@@ -126,7 +126,7 @@ const char *msm_sig_cmp[32]={
     ""  ,"7I","7Q","7X",""  ,""  ,""  ,""  ,""  ,"5D","5P","5X",
     "7D","7P","7Z",""  ,""  ,"1D","1P","1X"
 #else /* + extensions */
-    ""  ,"2I","2Q","2X","1D","1P","1X","6I","6Q","6X","6D","6P",
+    ""  ,"2I","2Q","2X","1S","1L","1Z","6I","6Q","6X","6D","6P",
     "6Z","7I","7Q","7X",""  ,"8D","8P","8X",""  ,"5D","5P","5X",
     "7D","7P","7Z",""  ,""  ,"1D","1P","1X"
 #endif
@@ -2568,6 +2568,13 @@ extern int decode_rtcm3(rtcm_t *rtcm)
     if (strstr(rtcm->opt,"-RT_INP")) {
         tow=time2gpst(utc2gpst(timeget()),&week);
         rtcm->time=gpst2time(week,floor(tow));
+    }
+    /* -STA=<id>: silently skip MSM messages for non-matching staid */
+    if (1071<=type&&type<=1137) {
+        char *p; int id;
+        if ((p=strstr(rtcm->opt,"-STA="))&&sscanf(p,"-STA=%d",&id)==1) {
+            if (getbitu(rtcm->buff,24+12,12)!=id) return 0;
+        }
     }
     switch (type) {
         case 1001: ret=decode_type1001(rtcm); break; /* not supported */

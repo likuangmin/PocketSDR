@@ -2,51 +2,78 @@
 #  makefile for pocket_trk, fftw_wisdom
 #
 
-CC = g++
-
 SRC = ../../src
 LIB = ../../lib
 BIN = ../../bin
+USE_SOAPY ?= 1
+USE_FFTW ?= 0
+
+INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src
 
 ifeq ($(OS),Windows_NT)
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src -I$(LIB)/cyusb
-    LIBSDR = $(LIB)/win32/libsdr.a
-    LDLIBS = -static $(LIBSDR) $(LIB)/win32/librtk.a $(LIB)/win32/libfec.a \
-             $(LIB)/win32/libldpc.a -lfftw3f -lwinmm -lws2_32 $(LIB)/cyusb/CyAPI.a \
-             -lsetupapi -lavrt -lwinmm -lpthread
-    OPTIONS =
+    CC = g++
+    INCLUDE += -I$(LIB)/cyusb
+    LDLIBS = $(LIB)/win32/libsdr.a $(LIB)/win32/librtk.a \
+             $(LIB)/cyusb/CyAPI.a -lsetupapi -lavrt -lwinmm \
+             -lws2_32 -lpthread -static
+    ifeq ($(USE_SOAPY),1)
+        INCLUDE += -I$(LIB)/SoapySDR/include
+        LDLIBS += -L$(LIB)/SoapySDR/lib -Wl,-Bdynamic -lSoapySDR -Wl,-Bstatic
+    endif
+    
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/win32/libpocketfft.a
+    endif
 else ifeq ($(shell uname -sm),Darwin arm64)
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src -I/opt/homebrew/include
-    LIBSDR = $(LIB)/macos/libsdr.a
-    LDLIBS = -L/opt/homebrew/lib $(LIBSDR) $(LIB)/macos/librtk.a $(LIB)/macos/libfec.a \
-             $(LIB)/macos/libldpc.a -lfftw3f -lpthread -lm -lusb-1.0
-    OPTIONS = -Wno-deprecated
+    CC = clang++
+    INCLUDE += -I/opt/homebrew/include
+    LDLIBS = -L/opt/homebrew/lib $(LIB)/macos/libsdr.a $(LIB)/macos/librtk.a \
+             -lpthread -lm -lusb-1.0
+    ifeq ($(USE_SOAPY),1)
+        LDLIBS += -lSoapySDR
+    endif
+    
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/macos/libpocketfft.a
+    endif
 else
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src
-    LIBSDR = $(LIB)/linux/libsdr.a
-    LDLIBS = $(LIBSDR) $(LIB)/linux/librtk.a $(LIB)/linux/libfec.a \
-             $(LIB)/linux/libldpc.a -lfftw3f -lpthread -lm -lusb-1.0
-    OPTIONS =
+    CC = g++
+    LDLIBS = $(LIB)/linux/libsdr.a $(LIB)/linux/librtk.a -lpthread -lm -lusb-1.0
+    ifeq ($(USE_SOAPY),1)
+        LDLIBS += -lSoapySDR
+    endif
+    
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/linux/libpocketfft.a
+    endif
 endif
 
 WARNOPT = -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
 
-#CFLAGS = -Ofast -march=native $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
-CFLAGS = -Ofast $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+#CFLAGS = -O3 -march=native $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+CFLAGS = -O3 $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+
+# relink when a linked library is rebuilt
+LIBDEP = $(filter %.a,$(LDLIBS))
 
 TARGET = pocket_trk fftw_wisdom
 
 all: $(TARGET)
 
-pocket_trk: pocket_trk.o $(LIBSDR)
+pocket_trk: pocket_trk.o
 fftw_wisdom: fftw_wisdom.o
 
-pocket_trk.o: $(SRC)/pocket_sdr.h
-fftw_wisdom.o: $(SRC)/pocket_sdr.h
+pocket_trk.o: $(SRC)/pocket_sdr.h $(LIBDEP)
+fftw_wisdom.o: $(SRC)/pocket_sdr.h $(LIBDEP)
 
 clean:
-	rm -f $(TARGET) *.exe *.o *.stackdump
+	rm -f $(TARGET) *.exe *.o *.obj *.stackdump
 
 install:
 	cp $(TARGET) $(BIN)
-

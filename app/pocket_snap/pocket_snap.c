@@ -12,6 +12,7 @@
 #include "pocket_sdr.h"
 
 // constants --------------------------------------------------------------------
+#define PROG_NAME "pocket_snap" // program name
 #define THRES_CN0  38.0    // threshold to lock signal (dB-Hz)
 #define EL_MASK    15.0    // elevation mask (deg)
 #define MAX_DOP    5000.0  // max Doppler freq. to search signal (Hz)
@@ -26,8 +27,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-double ionmodel_nav(gtime_t time, const nav_t *nav, const double *pos,
-    const double *azel);
+double ionmodel_nav(gtime_t time, nav_t *nav, const double *pos, const double *azel);
 double navgettgd(int sat, const nav_t *nav);
 #ifdef __cplusplus
 }
@@ -42,7 +42,14 @@ typedef struct {           // satellite data type
 
 // global variables -------------------------------------------------------------
 static sdr_cpx_t *code_fft[MAX_SAT] = {NULL}; // code FFT caches
-static int VERP = 0;       // verpose display flag
+static int VERB = 0;       // verbose display flag
+
+// print version ---------------------------------------------------------------
+static void print_ver(void)
+{
+     printf("%s ver.%s\n", PROG_NAME, sdr_get_ver());
+     exit(0);
+}
 
 // show usage -------------------------------------------------------------------
 static void show_usage(void)
@@ -54,11 +61,12 @@ static void show_usage(void)
 }
 
 // position string --------------------------------------------------------------
-static void pos_str(const double *rr, char *str)
+static void pos_str(const double *rr, char *str, size_t size)
 {
     double pos[3];
     ecef2pos(rr, pos);
-    sprintf(str, "%13.9f %14.9f %12.3f", pos[0] * R2D, pos[1] * R2D, pos[2]);
+    snprintf(str, size, "%13.9f %14.9f %12.3f", pos[0] * R2D, pos[1] * R2D,
+        pos[2]);
 }
 
 // select satellite -------------------------------------------------------------
@@ -124,16 +132,16 @@ static int search_sig(data_t *data, const char *sig, int sys, int prn,
     if (!code_fft[sat-1]) {
         int8_t *code = sdr_gen_code(sig, prn, &len_code);
         code_fft[sat-1] = sdr_cpx_malloc(2 * N);
-        sdr_gen_code_fft(code, len_code, T, 0.0, fs, N, N, code_fft[sat-1]);
+        sdr_gen_code_fft(code, NULL, len_code, T, 0.0, fs, N, N,
+            code_fft[sat-1]);
     }
     // doppler search bins
     float *fds;
     int len_fds;
     if (rrate == 0.0) {
         fds = sdr_dop_bins(T, 0.0, MAX_DOP, &len_fds);
-    }
-    else {
-        float dop = -rrate / CLIGHT * sdr_sig_freq(sig);
+    } else {
+        float dop = (float)(-rrate / CLIGHT * sdr_sig_freq(sig));
         fds = sdr_dop_bins(T, dop, MAX_DFREQ, &len_fds);
     }
     // parallel code search
@@ -151,7 +159,7 @@ static int search_sig(data_t *data, const char *sig, int sys, int prn,
         dop = sdr_fine_dop(P, 2 * N, fds, len_fds, ix);
         rrate = -dop * CLIGHT / sdr_sig_freq(sig);
         coff = fine_coff(sig, fs, P + ix[0] * 2 * N, N, ix[1] / fs, ix[1]);
-        if (VERP) {
+        if (VERB) {
             char str[32];
             satno2id(sat, str);
             printf("%s : SIG=%-5s C/N0=%5.1f dB-Hz DOP=%9.3f Hz COFF=%12.9f ms\n",
@@ -171,7 +179,7 @@ static int search_sig(data_t *data, const char *sig, int sys, int prn,
 static int search_sigs(gtime_t time, int ssys, const sdr_buff_t *dif, double fs,
     double fi, const double *rr, const nav_t *nav, data_t *data)
 {
-    if (VERP) {
+    if (VERB) {
         printf("search_sigs\n");
     }
     int n = 0;
@@ -243,7 +251,7 @@ static void drdot_dx(const double *rs, const double *vs, const double *x,
 // position by Doppler ----------------------------------------------------------
 static int pos_dop(const data_t *data, int N, double spos[][8], double *rr)
 {
-    if (VERP) {
+    if (VERB) {
         printf("pos_dop N=%d\n", N);
     }
     double x[4] = {0};
@@ -263,9 +271,9 @@ static int pos_dop(const data_t *data, int N, double spos[][8], double *rr)
         if (n < 4 || lsq(H, v, 4, n, dx, Q)) {
             return 0;
         }
-        if (VERP) {
+        if (VERB) {
             char str[64];
-            pos_str(x, str);
+            pos_str(x, str, sizeof(str));
             printf("(%d) N=%2d  POS=%s  RES=%10.3f m/s\n", i, n, str,
                 norm(v, n));
         }
@@ -283,7 +291,7 @@ static int pos_dop(const data_t *data, int N, double spos[][8], double *rr)
 // resolve ms ambiguity in code offset -----------------------------------------
 static void res_coff_amb(data_t *data, int N, double spos[][8], const double *rr)
 {
-    if (VERP) {
+    if (VERB) {
         printf("res_coff_amb\n");
     }
     double e[3], r, tau[MAX_SAT], tau_min = 1e9;
@@ -304,7 +312,7 @@ static void res_coff_amb(data_t *data, int N, double spos[][8], const double *rr
         if (norm(spos[i], 3) > 1e-3) {
             double off = (tau[i] - tau_ref) - (data[i].coff - coff_ref);
             data[i].coff += ROUND(off * 1e3) * 1e-3;
-            if (VERP) {
+            if (VERB) {
                 char sat1[16], sat2[16];
                 satno2id(data[i].sat, sat1);
                 satno2id(data[idx].sat, sat2);
@@ -317,9 +325,9 @@ static void res_coff_amb(data_t *data, int N, double spos[][8], const double *rr
 
 // estimate position by code offsets ------------------------------------------
 static int pos_coff(gtime_t time, const data_t *data, int N, double *rr,
-    const nav_t *nav, double *dtr)
+    nav_t *nav, double *dtr)
 {
-    if (VERP) {
+    if (VERB) {
         printf("pos_coff\n");
     }
     double x[5] = {0};
@@ -352,9 +360,9 @@ static int pos_coff(gtime_t time, const data_t *data, int N, double *rr,
         if (n < 5 || lsq(H, v, 5, n, dx, Q)) {
             break;
         }
-        if (VERP) {
+        if (VERB) {
             char str[64];
-            pos_str(x, str);
+            pos_str(x, str, sizeof(str));
             printf("(%d) N=%2d  POS=%s  CLK=%9.6f  DT=%9.6f  RES=%10.3f \n",
                 i, n, str, x[3] / CLIGHT, x[4], sqrt(dot(v, v, n) / n));
         }
@@ -405,14 +413,11 @@ static int parse_sys(const char *str)
     for (const char *s = str; *s; s++) {
         if (*s == 'G') {
             sys |= SYS_GPS;
-        }
-        else if (*s == 'E') {
+        } else if (*s == 'E') {
             sys |= SYS_GAL;
-        }
-        else if (*s == 'J') {
+        } else if (*s == 'J') {
             sys |= SYS_QZS;
-        }
-        else if (*s == 'C') {
+        } else if (*s == 'C') {
             sys |= SYS_CMP;
         }
     }
@@ -444,62 +449,7 @@ static const char *conv_path(const char *path)
 #endif
 }
 
-//-------------------------------------------------------------------------------
-//
-//   Synopsis
-// 
-//     pocket_snap [-ts time] [-pos lat,lon,hgt] [-ti sec] [-toff toff]
-//         [-f freq] [-fi freq] [-tint tint] [-sys sys[,...]] [-v] [-w file]
-//         -nav file [-out file] file
-// 
-//   Description
-// 
-//     Snapshot positioning with GNSS signals in digitized IF file.
-// 
-//   Options ([]: default)
-//  
-//     -ts time
-//         Captured start time in UTC as YYYY/MM/DD HH:mm:ss format.
-//         [parsed by file name]
-//
-//     -pos lat,lon,hgt
-//         Coarse receiver position as latitude, longitude in degree and
-//         height in m. [no coarse position]
-// 
-//     -ti sec
-//         Time interval of positioning in seconds. (0.0: single) [0.0]
-// 
-//     -toff toff
-//         Time offset from the start of digital IF data in seconds. [0.0]
-// 
-//     -f freq
-//         Sampling frequency of digital IF data in MHz. [12.0]
-//
-//     -fi freq
-//         IF frequency of digital IF data in MHz. The IF frequency equals 0, the
-//         IF data is treated as IQ-sampling (zero-IF). [0.0]
-//
-//     -tint tint
-//         Integration time for signal search in msec. [20.0]
-//
-//     -sys sys[,...]
-//         Select navigation system(s) (G=GPS,E=Galileo,J=QZSS,C=BDS). [G]
-//
-//     -v
-//         Enable verpose status display.
-//
-//     -w file
-//         Specify FFTW wisdowm file. [../python/fftw_wisdom.txt]
-//
-//     -nav file
-//         RINEX navigation data file.
-//
-//     -out file
-//         Output solution file as RTKLIB solution format.
-//
-//     file
-//         Digitized IF data file.
-//
+// main (see doc/command_ref.md) -----------------------------------------------
 int main(int argc, char **argv)
 {
     gtime_t ts = {0,0};
@@ -513,48 +463,37 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-ts") && i + 1 < argc) {
             ts = parse_time(argv[++i]);
-        }
-        else if (!strcmp(argv[i], "-pos") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-pos") && i + 1 < argc) {
             double pos[3] = {0};
             sscanf(argv[++i], "%lf,%lf,%lf", pos, pos + 1, pos + 2);
             pos[0] *= D2R;
             pos[1] *= D2R;
             pos2ecef(pos, rr);
-        }
-        else if (!strcmp(argv[i], "-ti") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-ti") && i + 1 < argc) {
             ti = atof(argv[++i]);
-        }
-        else if (!strcmp(argv[i], "-toff") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-toff") && i + 1 < argc) {
             toff = atof(argv[++i]);
-        }
-        else if (!strcmp(argv[i], "-f") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-f") && i + 1 < argc) {
             fs = atof(argv[++i]) * 1e6;
-        }
-        else if (!strcmp(argv[i], "-fi") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-fi") && i + 1 < argc) {
             fi = atof(argv[++i]) * 1e6;
-        }
-        else if (!strcmp(argv[i], "-tint") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-tint") && i + 1 < argc) {
             tint = atof(argv[++i]) * 1e-3;
-        }
-        else if (!strcmp(argv[i], "-sys") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-sys") && i + 1 < argc) {
             ssys = parse_sys(argv[++i]);
-        }
-        else if (!strcmp(argv[i], "-nav") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-nav") && i + 1 < argc) {
             nfile = argv[++i];
-        }
-        else if (!strcmp(argv[i], "-out") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-out") && i + 1 < argc) {
             ofile = argv[++i];
-        }
-        else if (!strcmp(argv[i], "-v")) {
-            VERP = 1;
-        }
-        else if (!strcmp(argv[i], "-w") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "-verb")) {
+            VERB = 1;
+        } else if (!strcmp(argv[i], "-w") && i + 1 < argc) {
             fftw_wisdom = argv[++i];
-        }
-        else if (argv[i][0] == '-') {
+        } else if (!strcmp(argv[i], "-v")) {
+            print_ver();
+        } else if (argv[i][0] == '-') {
             show_usage();
-        }
-        else {
+        } else {
             file = argv[i];
         }
     }
@@ -624,7 +563,7 @@ int main(int argc, char **argv)
         // write solution
         char tstr[64], str[128];
         time2str(gpst2utc(timeadd(tt, -dtr)), tstr, 3);
-        pos_str(rr, str);
+        pos_str(rr, str, sizeof(str));
         fprintf(fp, "%s   %s %4d %4d\n", tstr, str, 5, ns);
         fflush(fp);
     }
@@ -633,4 +572,3 @@ int main(int argc, char **argv)
     fclose(fp);
     return 0;
 }
-

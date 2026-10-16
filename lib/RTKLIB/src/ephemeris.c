@@ -70,6 +70,9 @@
 *                           fix bug on clock reference time in satpos_ssr()
 *                           fix bug on wrong value with ura=15 in var_ura()
 *                           use integer types in stdint.h
+*
+*           branch for Pocket SDR
+*           2026/06/01 0.1  add api galm2pos() for glonass almanac
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -179,6 +182,58 @@ extern void alm2pos(gtime_t time, const alm_t *alm, double *rs, double *dts)
     rs[1]=x*sinO+y*cosi*cosO;
     rs[2]=y*sin(i);
     *dts=alm->f0+alm->f1*tk;
+}
+/* glonass almanac to satellite position and clock bias ------------------------
+* compute satellite position and clock bias with glonass almanac (ref [2] 4.5)
+* args   : gtime_t time     I   time (gpst)
+*          alm_t  *alm      I   almanac (glo.* fields used)
+*          double *rs       O   satellite position (ecef) {x,y,z} (m)
+*          double *dts      O   satellite clock bias (s)
+* return : none
+* notes  : tlambda (glo.tlambda) is in Moscow sidereal seconds of day (UTC+3h)
+*          nominal inclination = 63 deg, correction = glo.di (rad)
+*          ascending node longitude (glo.lambda) is Greenwich lon at tlambda
+*-----------------------------------------------------------------------------*/
+extern void galm2pos(gtime_t time, const alm_t *alm, double *rs, double *dts)
+{
+    double T,n,a,dt,M,E,Ek,nu,u,r,i,O,sinE,cosE,x,y,sinO,cosO,cosi,ep[6];
+    gtime_t t0;
+    int k;
+    
+    trace(4,"galm2pos: time=%s sat=%2d\n",time_str(time,3),alm->sat);
+    
+    rs[0]=rs[1]=rs[2]=*dts=0.0;
+    
+    T = 43200.0 + alm->glo.dT;
+    if (T<=0.0) return;
+    n = 2.0*PI/T;
+    a = pow(MU_GLO/(n*n), 1.0/3.0);
+    
+    /* ascending node epoch t0 in GPST */
+    time2epoch(gpst2utc(time),ep);
+    ep[3]=ep[4]=ep[5]=0.0;
+    t0 = timeadd(utc2gpst(epoch2time(ep)), alm->glo.tlambda - 10800.0);
+    
+    dt = timediff(time,t0);
+    dt -= floor(dt/T)*T;
+    M = PI + n*dt;
+    for (k=0,E=M,Ek=0.0; fabs(E-Ek)>RTOL_KEPLER&&k<MAX_ITER_KEPLER; k++) {
+        Ek=E; E-=(E-alm->glo.eps*sin(E)-M)/(1.0-alm->glo.eps*cos(E));
+    }
+    sinE=sin(E); cosE=cos(E);
+    nu = atan2(sqrt(1.0-alm->glo.eps*alm->glo.eps)*sinE, cosE-alm->glo.eps);
+    u  = nu + alm->glo.omg;
+    r  = a*(1.0-alm->glo.eps*cosE);
+    i = 63.0*D2R + alm->glo.di;
+    O = alm->glo.lambda - OMGE_GLO*dt;
+    
+    x=r*cos(u); y=r*sin(u); sinO=sin(O); cosO=cos(O); cosi=cos(i);
+    rs[0]=x*cosO - y*cosi*sinO;
+    rs[1]=x*sinO + y*cosi*cosO;
+    rs[2]=y*sin(i);
+    
+    /* clock: coarse correction tau_n^A  ref [2] (4.5.2.4) */
+    *dts = -alm->glo.taun;
 }
 /* broadcast ephemeris to satellite clock bias ---------------------------------
 * compute satellite clock bias with broadcast ephemeris (gps, galileo, qzss)
@@ -451,7 +506,7 @@ static eph_t *seleph(gtime_t time, int sat, int iode, const nav_t *nav)
         if (t<=tmin) {j=i; tmin=t;} /* toe closest to time */
     }
     if (iode>=0||j<0) {
-        trace(3,"no broadcast ephemeris: %s sat=%2d iode=%3d\n",
+        trace(4,"no broadcast ephemeris: %s sat=%2d iode=%3d\n",
               time_str(time,0),sat,iode);
         return NULL;
     }
@@ -473,7 +528,7 @@ static geph_t *selgeph(gtime_t time, int sat, int iode, const nav_t *nav)
         if (t<=tmin) {j=i; tmin=t;} /* toe closest to time */
     }
     if (iode>=0||j<0) {
-        trace(3,"no glonass ephemeris  : %s sat=%2d iode=%2d\n",time_str(time,0),
+        trace(4,"no glonass ephemeris  : %s sat=%2d iode=%2d\n",time_str(time,0),
               sat,iode);
         return NULL;
     }
@@ -493,7 +548,7 @@ static seph_t *selseph(gtime_t time, int sat, const nav_t *nav)
         if (t<=tmin) {j=i; tmin=t;} /* toe closest to time */
     }
     if (j<0) {
-        trace(3,"no sbas ephemeris     : %s sat=%2d\n",time_str(time,0),sat);
+        trace(4,"no sbas ephemeris     : %s sat=%2d\n",time_str(time,0),sat);
         return NULL;
     }
     return nav->seph+j;
@@ -783,7 +838,7 @@ extern void satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
         
         /* satellite clock bias by broadcast ephemeris */
         if (!ephclk(time[i],teph,obs[i].sat,nav,&dt)) {
-            trace(3,"no broadcast clock %s sat=%2d\n",time_str(time[i],3),obs[i].sat);
+            trace(4,"no broadcast clock %s sat=%2d\n",time_str(time[i],3),obs[i].sat);
             continue;
         }
         time[i]=timeadd(time[i],-dt);
@@ -791,7 +846,7 @@ extern void satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
         /* satellite position and clock at transmission time */
         if (!satpos(time[i],teph,obs[i].sat,ephopt,nav,rs+i*6,dts+i*2,var+i,
                     svh+i)) {
-            trace(3,"no ephemeris %s sat=%2d\n",time_str(time[i],3),obs[i].sat);
+            trace(4,"no ephemeris %s sat=%2d\n",time_str(time[i],3),obs[i].sat);
             continue;
         }
         /* if no precise clock available, use broadcast clock instead */

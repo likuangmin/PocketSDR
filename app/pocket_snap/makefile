@@ -5,32 +5,47 @@
 SRC = ../../src
 LIB = ../../lib
 BIN = ../../bin
+USE_FFTW ?= 0
+
+INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src
 
 ifeq ($(OS),Windows_NT)
     CC = g++
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src -I$(LIB)/cyusb
-    LDLIBS = $(LIB)/win32/libsdr.a $(LIB)/win32/librtk.a -lfftw3f -lwinmm -lws2_32
-    OPTIONS = -DWIN32 -DAVX2 -mavx2 -mfma
+    INCLUDE += -I$(LIB)/cyusb
+    LDLIBS = $(LIB)/win32/libsdr.a $(LIB)/win32/librtk.a -lwinmm -lws2_32
+    OPTIONS =
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/win32/libpocketfft.a
+    endif
 else ifeq ($(shell uname -sm),Darwin arm64)
-    CC = clang
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src
-    LDLIBS = -L/opt/homebrew/lib $(LIB)/macos/libsdr.a $(LIB)/macos/librtk.a \
-             -lfftw3f -lpthread -lm
+    CC = clang++
+    LDLIBS = -L/opt/homebrew/lib $(LIB)/macos/libsdr.a $(LIB)/macos/librtk.a -lpthread -lm
     OPTIONS = -I/opt/homebrew/include
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/macos/libpocketfft.a
+    endif
 else
     CC = g++
-    INCLUDE = -I$(SRC) -I$(LIB)/RTKLIB/src
-    LDLIBS = $(LIB)/linux/libsdr.a $(LIB)/linux/librtk.a -lfftw3f -lpthread -lm
-    OPTIONS = -DAVX2 -mavx2 -mfma
-endif
-ifeq ($(shell uname -m),aarch64)
-    OPTIONS = -DNEON
+    LDLIBS = $(LIB)/linux/libsdr.a $(LIB)/linux/librtk.a -lpthread -lm
+    OPTIONS =
+    ifeq ($(USE_FFTW),1)
+        LDLIBS += -lfftw3f
+    else
+        LDLIBS += $(LIB)/linux/libpocketfft.a
+    endif
 endif
 
 WARNOPT = -Wall -Wextra -Wno-unused-parameter -Wno-unused-but-set-variable
 
-#CFLAGS = -Ofast -march=native $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
-CFLAGS = -Ofast $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+#CFLAGS = -O3 -march=native $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+CFLAGS = -O3 $(INCLUDE) $(WARNOPT) $(OPTIONS) -g
+
+# relink when a linked library is rebuilt
+LIBDEP = $(filter %.a,$(LDLIBS))
 
 TARGET = pocket_snap
 
@@ -38,11 +53,10 @@ all: $(TARGET)
 
 pocket_snap: pocket_snap.o
 
-pocket_snap.o: $(SRC)/pocket_sdr.h
+pocket_snap.o: $(SRC)/pocket_sdr.h $(LIBDEP)
 
 clean:
-	rm -f $(TARGET) *.exe *.o *.stackdump
+	rm -f $(TARGET) *.exe *.o *.obj *.stackdump
 
 install:
 	cp $(TARGET) $(BIN)
-

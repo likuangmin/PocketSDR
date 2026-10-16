@@ -12,6 +12,8 @@
 //  2024-04-20  1.3  support Pocket SDR FE 4CH
 //  2024-06-29  1.4  delete API sdr_read_settings(), sdr_write_settings()
 //                   add API sdr_conf_read(), sdr_conf_write()
+//  2024-11-25  1.5  support Pocket SDR FE 8CH
+//  2026-04-22  1.6  support [CHALL] for same settings for all CHs
 //
 #include "pocket_sdr.h"
 
@@ -21,6 +23,7 @@
 #define TYPE_POCKET_2CH 0      // device type: Pocket SDR FE 2CH
 #define TYPE_POCKET_4CH 1      // device type: Pocket SDR FE 4CH
 #define TYPE_SPIDER     2      // device type: Spider SDR
+#define TYPE_POCKET_8CH 3      // device type: Pocket SDR FE 8CH
 #define MAX_REG_MAX2771 11     // number of registers of MAX2771
 #define MAX_REG_MAX2769 10     // number of registers of MAX2769
 
@@ -32,7 +35,7 @@ typedef struct {       // register field definition type
     uint8_t pos;       // bit position (0:LSB,31:MSB)
     uint8_t fix[SDR_MAX_RFCH];  // fixed setting (0:free,1:fixed)
     uint32_t val[SDR_MAX_RFCH]; // value for fixed setting
-    const char *desc;  // description */
+    const char *desc;  // description
 } reg_t;
 
 // device register definitions -------------------------------------------------
@@ -40,7 +43,7 @@ static const reg_t MAX2771_field[] = { // MAX2771 register field definitions
     // field          ,addr,nbit,pos, fix[],  val[], desc
     {"CHIPEN"         , 0x0,  1, 31, {1, 1}, {1, 1}, "Chip enable (0:disable,1:enable)"},
     {"IDLE"           , 0x0,  1, 30, {1, 1}, {0, 0}, "Idle enable (0:operating-mode,1:idle-mode)"},
-    {"MIXPOLE"        , 0x0,  1, 17, {1, 1}, {0, 0}, "Mixer pole selection (0:13MHz,1:36MHz)"},
+    {"MIXPOLE"        , 0x0,  1, 17, {1, 1}, {1, 1}, "Mixer pole selection (0:13MHz,1:36MHz)"},
     {"LNAMODE"        , 0x0,  2, 15, {0, 0}, {0, 1}, "LNA mode selection (0:high-band,1:low-band,2:disable)"},
     {"MIXERMODE"      , 0x0,  2, 13, {0, 0}, {0, 1}, "Mixer mode selection (0:high-band,1:low-band,2:disable)"},
     {"FCEN"           , 0x0,  7,  6, {0, 0}, {0, 0}, "IF filter center frequency: (128-FCEN)/2*{0.195|0.66|0.355} MHz"},
@@ -66,13 +69,13 @@ static const reg_t MAX2771_field[] = { // MAX2771 register field definitions
     {"STRMSTART"      , 0x2,  1, 10, {1, 1}, {0, 0}, "Enable data streaming (rising edge)"},
     {"STRMSTOP"       , 0x2,  1,  9, {1, 1}, {0, 0}, "Disable data streaming (rising edge)"},
     {"STRMBITS"       , 0x2,  2,  4, {1, 1}, {1, 1}, "Number of bits streamed (1:IMSB/ILSB,3:IMSB/ILSB/QMSB/QLSB)"},
-    {"STAMPEN"        , 0x2,  1,  3, {1, 1}, {0, 0}, "Enable insersion of frame numbers (0:disable,1:enable)"},
+    {"STAMPEN"        , 0x2,  1,  3, {1, 1}, {0, 0}, "Enable insertion of frame numbers (0:disable,1:enable)"},
     {"TIMESYNCEN"     , 0x2,  1,  2, {1, 1}, {0, 0}, "Enable output of time sync pulse when streaming enabled by STRMEN"},
     {"DATASYNCEN"     , 0x2,  1,  1, {1, 1}, {0, 0}, "Enable sync pulse at DATASYNC"},
     {"STRMRST"        , 0x2,  1,  0, {1, 1}, {0, 0}, "Reset all counters"},
     {"LOBAND"         , 0x3,  1, 28, {0, 0}, {0, 1}, "Local oscillator band selection (0:L1,1:L2/L5)"},
     {"REFOUTEN"       , 0x3,  1, 24, {1, 1}, {1, 1}, "Output clock buffer enable (0:disable,1:enable)"},
-    {"IXTAL"          , 0x3,  2, 19, {1, 1}, {1, 1}, "Current programing for XTAL (1:normal,3:high-current)"},
+    {"IXTAL"          , 0x3,  2, 19, {1, 1}, {1, 1}, "Current programming for XTAL (1:normal,3:high-current)"},
     {"ICP"            , 0x3,  1,  9, {1, 1}, {0, 0}, "Charge pump current selection (0:0.5mA,1:1mA)"},
     {"INT_PLL"        , 0x3,  1,  3, {0, 0}, {0, 0}, "PLL mode control (0:fractional-N,1:integer-N)"},
     {"PWRSAV"         , 0x3,  1,  2, {1, 1}, {0, 0}, "Enable PLL power-save mode (0:disable,1:enable)"},
@@ -113,7 +116,7 @@ static const reg_t MAX2769B_field[] = { // MAX2769B register field definitions
     {"BITS"           , 0x1,  3,  6, {1, 1}, {2, 2}, "Number of bits in ADC (0:1bit,2:2bit,4:3bit)"},
     {"DRVCFG"         , 0x1,  2,  4, {1, 1}, {0, 0}, "Output driver config (0:CMOS-logic,2:analog)"},
     {"DIEID"          , 0x1,  2,  0, {1, 1}, {0, 0}, "Identifiers version of IC"},
-    {"GAININ"         , 0x2,  6, 22, {0, 0}, {0, 0}, "PGA gain value programing ((GAININ-1)dB) (0-63)"},
+    {"GAININ"         , 0x2,  6, 22, {0, 0}, {0, 0}, "PGA gain value programming ((GAININ-1)dB) (0-63)"},
     {"HILOADEN"       , 0x2,  1, 20, {1, 1}, {0, 0}, "Enable output driver to drive high loads (0:disable,1:enable)"},
     {"FHIPEN"         , 0x2,  1, 15, {0, 0}, {1, 1}, "Enable highpass coupling between filter and PGA (0:disable,1:enable)"},
     {"STRMEN"         , 0x2,  1, 11, {1, 1}, {0, 0}, "Enable DSP interface (0:disable,1:enable)"},
@@ -151,6 +154,7 @@ static int max_ch(int type)
         case TYPE_POCKET_2CH: return 2;
         case TYPE_POCKET_4CH: return 4;
         case TYPE_SPIDER    : return 8;
+        case TYPE_POCKET_8CH: return 8;
     }
     return 0;
 }
@@ -160,7 +164,8 @@ static int max_reg(int type)
 {
     switch (type) {
         case TYPE_POCKET_2CH:
-        case TYPE_POCKET_4CH: return MAX_REG_MAX2771;
+        case TYPE_POCKET_4CH:
+        case TYPE_POCKET_8CH: return MAX_REG_MAX2771;
         case TYPE_SPIDER    : return MAX_REG_MAX2769;
     }
     return 0;
@@ -189,8 +194,9 @@ static int read_dev_type(sdr_usb_t *usb, double *fx)
     }
     *fx = (((uint16_t)data[1] << 8) + data[2]) * 1e3;
     if ((data[3] >> 4) &  1) return TYPE_SPIDER;
-    if ((data[0] >> 4) == 1) return TYPE_POCKET_2CH; // F/W ver.1 (FE 2CH)
+    if ((data[0] >> 4) <= 2) return TYPE_POCKET_2CH; // F/W ver.1 (FE 2CH)
     if ((data[0] >> 4) == 3) return TYPE_POCKET_4CH; // F/W ver.3 (FE 4CH)
+    if ((data[0] >> 4) == 4) return TYPE_POCKET_8CH; // F/W ver.4 (FE 8CH)
     return -1;
 }
 
@@ -224,37 +230,51 @@ static void read_config_key(FILE *fp, int type, uint32_t regs[][SDR_MAX_REG])
     const reg_t *reg_field =
         (type == TYPE_SPIDER) ? MAX2769B_field : MAX2771_field;
     char buff[128];
-    int ch = 1;
+    int i, ch, m = max_ch(type), ch_mask[SDR_MAX_RFCH] = {0};
     
-    while (fgets(buff, sizeof(buff), fp)) {
-        uint32_t val, mask;
+    for (int l = 0; fgets(buff, sizeof(buff), fp); l++) {
+        uint32_t val, reg_mask;
         char key[32], *p;
         
         if ((p = strchr(buff, '#'))) *p = '\0';
-        if (sscanf(buff, "[CH%d]", &ch) == 1) continue;
-        if (ch < 1 || ch > max_ch(type)) continue;
+        
+        if (!strncmp(buff, "[CHALL]", 7)) {
+            for (int j = 0; j < m; j++) ch_mask[j] = 1;
+            continue;
+        }
+        if (sscanf(buff, "[CH%d", &ch) == 1) {
+            if (ch >= 1 && ch <= m) {
+                for (int j = 0; j < m; j++) ch_mask[j] = j + 1 == ch;
+            } else {
+                fprintf(stderr, "Invalid CH (%d): CH=%d\n", l + 1, ch);
+            }
+            continue;
+        }
         if (!(p = strchr(buff, '='))) continue;
         *p++ = '\0';
         if (sscanf(buff, "%31s", key) < 1) continue;
-        int i;
         for (i = 0; *reg_field[i].field; i++) {
             if (!strcmp(key, reg_field[i].field)) break;
         }
         if (!*reg_field[i].field) {
-            fprintf(stderr, "Invalid field: [CH%d] %s\n", ch, key);
+            fprintf(stderr, "Invalid field (%d): %s\n", l + 1, key);
             continue;
         }
         if (sscanf(p, "%d", (int *)&val) < 1 && sscanf(p, "0x%X", &val) < 1) {
-            fprintf(stderr, "Invalid value: [CH%d] %s = %s\n", ch, key, p);
+            fprintf(stderr, "Invalid value (%d): %s = %s\n", l + 1, key, p);
             continue;
         }
         if (val >= ((uint32_t)1 << reg_field[i].nbit)) {
-            fprintf(stderr, "Invalid value: [CH%d] %s = %d\n", ch, key, val);
+            fprintf(stderr, "Invalid value (%d): %s = %d\n", l + 1, key, val);
             continue;
         }
-        mask = bit_mask(reg_field + i);
-        regs[ch-1][reg_field[i].addr] &= ~mask;
-        regs[ch-1][reg_field[i].addr] |= (val << reg_field[i].pos) & mask;
+        reg_mask = bit_mask(reg_field + i);
+        
+        for (int j = 0; j < max_ch(type); j++) {
+            if (!ch_mask[j]) continue;
+            regs[j][reg_field[i].addr] &= ~reg_mask;
+            regs[j][reg_field[i].addr] |= (val << reg_field[i].pos) & reg_mask;
+        }
     }
 }
 
@@ -270,8 +290,7 @@ static int read_config(const char *file, int type, uint32_t regs[][SDR_MAX_REG],
     }
     if (opt & 4) {
         read_config_hex(fp, type, regs);
-    }
-    else {
+    } else {
         read_config_key(fp, type, regs);
     }
     fclose(fp);
@@ -289,6 +308,7 @@ static void write_MAX2771_stat(FILE *fp, double fx, int ch, uint32_t *reg)
     uint32_t FBW        = (reg[0x0] >>  3) & 0x7;
     uint32_t FCENX      = (reg[0x0] >>  1) & 0x1;
     uint32_t ENIQ       = (reg[0x1] >> 27) & 0x1;
+    uint32_t BITS       = (reg[0x1] >>  6) & 0x7;
     uint32_t INT_PLL    = (reg[0x3] >>  3) & 0x1;
     uint32_t NDIV       = (reg[0x4] >> 13) & 0x7FFF;
     uint32_t RDIV       = (reg[0x4] >>  3) & 0x3FF;
@@ -310,9 +330,9 @@ static void write_MAX2771_stat(FILE *fp, double fx, int ch, uint32_t *reg)
     f_adc *= ADCCLK      ? 1.0 : ratio[REFDIV];
     f_adc *= !FCLKIN     ? 1.0 : ADCCLK_L / (4096.0 - ADCCLK_M + ADCCLK_L);
     double f_cen = FCENX ? (128 - FCEN) / 2.0 * f_step[FBW] : 0.0;
-    fprintf(fp, "#  [CH%d] F_LO =%9.3f MHz, F_ADC =%7.3f MHz (%-2s), "
+    fprintf(fp, "#  [CH%d] F_LO =%13.6f MHz, F_ADC =%10.6f MHz (%-2s), "
         "F_FILT =%5.1f MHz, BW_FILT =%5.1f MHz\n", ch + 1, f_lo, f_adc,
-        ENIQ ? "IQ" : "I", f_cen, f_bw[FBW]);
+        (ENIQ && BITS != 4) ? "IQ" : "I", f_cen, f_bw[FBW]);
 }
 
 // flip bits -------------------------------------------------------------------
@@ -336,6 +356,7 @@ static void write_MAX2769B_stat(FILE *fp, double fx, int ch, uint32_t *reg)
     uint32_t FCENX      = (reg[0x0] >>  1) & 0x1;
     uint32_t FBW        = (reg[0x0] >>  3) & 0x3;
     uint32_t IQEN       = (reg[0x1] >> 27) & 0x1;
+    uint32_t BITS       = (reg[0x1] >>  6) & 0x7;
     uint32_t INT_PLL    = (reg[0x3] >>  3) & 0x1;
     uint32_t NDIV       = (reg[0x4] >> 13) & 0x7FFF;
     uint32_t RDIV       = (reg[0x4] >>  3) & 0x3FF;
@@ -353,7 +374,7 @@ static void write_MAX2769B_stat(FILE *fp, double fx, int ch, uint32_t *reg)
     double f_cen = FCENX ? (128 - flip_bits(FCEN, 7)) / 2.0 * f_step[FBW] : 0.0;
     fprintf(fp, "#  [CH%d] F_LO =%9.3f MHz, F_ADC =%7.3f MHz (%-2s), "
         "F_FILT =%5.1f MHz, BW_FILT =%5.1f MHz\n", ch + 1, f_lo, f_adc,
-        IQEN ? "IQ" : "I", f_cen, f_bw[FBW]);
+        (IQEN && BITS != 4) ? "IQ" : "I", f_cen, f_bw[FBW]);
 }
 
 // write device channel status -------------------------------------------------
@@ -361,8 +382,7 @@ static void write_stat(FILE *fp, int type, double fx, int ch, uint32_t *reg)
 {
     if (type == TYPE_SPIDER) {
         write_MAX2769B_stat(fp, fx, ch, reg);
-    }
-    else {
+    } else {
         write_MAX2771_stat(fp, fx, ch, reg);
     }
 }
@@ -402,8 +422,7 @@ static void write_config_key(FILE *fp, int type, double fx,
             if (!(opt & 1)) {
                 if (type == TYPE_SPIDER) {
                     if (reg_field[j].fix[0]) continue;
-                }
-                else {
+                } else {
                     if (reg_field[j].fix[i >= 1 ? 1 : 0]) continue;
                 }
             }
@@ -427,8 +446,7 @@ static int write_config(const char *file, int type, double fx,
     }
     if (opt & 4) {
         write_config_hex(fp, type, regs);
-    }
-    else {
+    } else {
         write_config_key(fp, type, fx, regs, opt);
     }
     fclose(fp);
@@ -489,11 +507,9 @@ static void set_fixed(int type, uint32_t regs[][SDR_MAX_REG])
             if (type == TYPE_SPIDER) {
                 if (!reg_field[i].fix[0]) continue;
                 val = reg_field[i].val[0];
-            }
-            else if (!strcmp(reg_field[i].field, "EXTADCCLK")) {
+            } else if (!strcmp(reg_field[i].field, "EXTADCCLK")) {
                 val = (type == TYPE_POCKET_2CH && j == 0) ? 0 : 1; // 0:int,1:ext
-            }
-            else {
+            } else {
                 if (!reg_field[i].fix[j >= 1 ? 1 : 0]) continue;
                 val = reg_field[i].val[j >= 1 ? 1 : 0];
             }
@@ -512,8 +528,7 @@ static void write_regs(sdr_usb_t *usb, int type, uint32_t regs[][SDR_MAX_REG])
             // write register except reserved or test reg
             if (type == TYPE_SPIDER) {
                 if (j == 6 || j == 8) continue;
-            }
-            else { // Pocket SDR
+            } else { // Pocket SDR
                 if (j == 6 || j == 8 || j == 9) continue;
             }
             write_reg(usb, i, j, regs[i][j]);

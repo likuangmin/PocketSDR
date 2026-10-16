@@ -8,6 +8,8 @@
 #  2021-12-24  1.0  new
 #  2022-01-13  1.1  support tracking of L6D, L6E
 #  2022-02-15  1.2  update ch state by external trigger
+#  2022-12-19  1.3  fix domain error in C/N0 computation
+#  2026-07-19  1.4  remove prompt-noise bias from C/N0 estimate
 #
 from math import *
 import numpy as np
@@ -27,7 +29,7 @@ B_FLL      = (5.0, 2.0)      # band-width of FLL filter (Hz) (wide, narrow)
 SP_CORR    = 0.25            # default correlator spacing (chip)
 MAX_DOP    = 5000.0          # default max Doppler for acquisition (Hz)
 N_CODE     = 10              # number of code bank
-THRES_CN0  = (35.0, 32.0)    # C/N0 threshold (dB-Hz) (lock, lost)
+THRES_CN0  = (35.0, 25.0)    # C/N0 threshold (dB-Hz) (lock, lost)
 THRES_SYNC  = 0.02           # threshold for sec-code sync
 THRES_LOST  = 0.002          # threshold for sec-code lost
 
@@ -57,16 +59,17 @@ def ch_new(sig, prn, fs, fi, max_dop=MAX_DOP, sp_corr=SP_CORR, add_corr=0,
     ch.time = 0.0                   # receiver time
     ch.sig = sig.upper()            # signal type
     ch.prn = prn                    # PRN number
-    ch.sat = sdr_code.sat_id(ch.sig, ch.prn) # satelltie ID
+    ch.sat = sdr_code.sat_id(ch.sig, ch.prn) # satellite ID
     ch.code = sdr_code.gen_code(sig, prn) # primary code
     ch.sec_code = sdr_code.sec_code(sig, prn) # secondary code
     ch.fc = sdr_code.sig_freq(sig)  # carrier frequency (Hz)
-    ch.fs = fs                      # sampling freqency (Hz)
+    ch.fs = fs                      # sampling frequency (Hz)
     ch.fi = shift_freq(sig, prn, fi) # IF frequency (Hz)
     ch.T = sdr_code.code_cyc(sig)   # code cycle (period) (s)
     ch.N = int(fs * ch.T)           # number of samples in a code cycle
     ch.fd = 0.0                     # Doppler frequency (Hz)
     ch.coff = 0.0                   # code offset (s)
+    ch.phi = 0.0                    # carrier phase (cyc)
     ch.adr = 0.0                    # accumulated Doppler (cyc)
     ch.cn0 = 0.0                    # C/N0 (dB-Hz)
     ch.lock = 0                     # lock count
@@ -81,7 +84,7 @@ def ch_new(sig, prn, fs, fi, max_dop=MAX_DOP, sp_corr=SP_CORR, add_corr=0,
 #  Update a receiver channel. A receiver channel is a state machine which has
 #  the following internal states indicated as ch.state. By calling the function,
 #  the receiver channel search and track GNSS signals and decode navigation
-#  data in the signals. The results of the signal acquisition, trackingare and
+#  data in the signals. The results of the signal acquisition, tracking and
 #  navigation data decoding are output as log messages. The internal status are
 #  also accessed as object instance variables of the receiver channel after
 #  calling the function. The function should be called in the cycle of GNSS
@@ -180,6 +183,7 @@ def start_track(ch, fd, coff, cn0):
     ch.lock = 0
     ch.fd = fd
     ch.coff = coff
+    ch.phi = 0.0
     ch.adr = 0.0
     ch.cn0 = cn0
     trk_init(ch.trk)
@@ -191,12 +195,14 @@ def track_sig(ch, time, buff, ix):
     fc = ch.fi + ch.fd     # IF carrier frequency with Doppler (Hz)
     ch.adr += ch.fd * tau  # accumulated Doppler (cyc)
     ch.coff -= ch.fd / ch.fc * tau # carrier-aided code offset (s)
+    ch.phi += fc * tau
+    ch.phi -= floor(ch.phi)
     ch.time = time
     
     # code position (samples) and carrier phase (cyc)
     i = int(ch.coff * ch.fs) % ch.N
     j = int(fmod(ch.coff * ch.fs, 1.0) * N_CODE) # index of code bank
-    phi = ch.fi * tau + ch.adr + fc * i / ch.fs
+    phi = ch.phi + fc * i / ch.fs
     
     if ch.sig == 'L6D' or ch.sig == 'L6E':
         # FFT correlator
@@ -209,7 +215,7 @@ def track_sig(ch, time, buff, ix):
         ch.trk.C = corr_std(buff, ix + i, ch.N, ch.fs, fc, phi, ch.trk.code[j],
             ch.trk.pos)
     
-    # add P correlator outputs to histroy
+    # add P correlator outputs to history
     add_buff(ch.trk.P, ch.trk.C[0])
     ch.lock += 1
     
@@ -284,8 +290,9 @@ def DLL(ch):
     if ch.lock % N == 0:
         E = ch.trk.sumE
         L = ch.trk.sumL
-        err_code = (E - L) / (E + L) / 2.0 * ch.T / len(ch.code) # (s)
-        ch.coff -= B_DLL / 0.25 * err_code * ch.T * N
+        if E + L > 0.0:
+            err_code = (E - L) / (E + L) / 2.0 * ch.T / len(ch.code) # (s)
+            ch.coff -= B_DLL / 0.25 * err_code * ch.T * N
         ch.trk.sumE = ch.trk.sumL = 0.0
 
 # update C/N0 ------------------------------------------------------------------
@@ -293,8 +300,9 @@ def CN0(ch):
     ch.trk.sumP += np.abs(ch.trk.C[0]) ** 2
     ch.trk.sumN += np.abs(ch.trk.C[3]) ** 2
     if ch.lock % int(T_CN0 / ch.T) == 0:
-        if ch.trk.sumN > 0.0:
-            cn0 = 10.0 * log10(ch.trk.sumP / ch.trk.sumN / ch.T)
+        if ch.trk.sumP > 0.0 and ch.trk.sumN > 0.0:
+            S = np.max([ch.trk.sumP - ch.trk.sumN, 0.01 * ch.trk.sumN])
+            cn0 = 10.0 * log10(S / ch.trk.sumN / ch.T)
             ch.cn0 += 0.5 * (cn0 - ch.cn0)
         ch.trk.sumP = ch.trk.sumN = 0.0
 

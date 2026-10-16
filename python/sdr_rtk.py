@@ -52,7 +52,6 @@ OMGE          = 7.2921151467E-5
 RE_WGS84      = 6378137.0
 NFREQ         = get_const_int('NFREQ')
 NEXOBS        = get_const_int('NEXOBS')
-SNR_UNIT      = get_const_int('SNR_UNIT')
 MAXSAT        = get_const_int('MAXSAT')
 MAXSTA        = get_const_int('MAXSTA')
 MAXANT        = get_const_int('MAXANT')
@@ -171,6 +170,12 @@ def obs2code(obs):
 def code2obs(code):
     librtk.code2obs.restype = c_char_p
     return librtk.code2obs(c_uint8(code)).decode()
+
+# system and obs code to frequency ---------------------------------------------
+def code2freq(sys, code, fcn=0):
+    librtk.code2freq.argtypes = [c_int32, c_uint8, c_int32]
+    librtk.code2freq.restype = c_double
+    return librtk.code2freq(sys, code, fcn)
 
 # epoch to time ----------------------------------------------------------------
 def epoch2time(ep):

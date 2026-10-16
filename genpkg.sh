@@ -3,15 +3,15 @@
 # generate package
 #
 PRG=PocketSDR
-VER=0.13
+VER=0.20
 
 cd ..
 
 tar cvf - \
         --exclude ".git" \
         --exclude "*.o" \
-        --exclude "*.a" \
-        --exclude "*.so" \
+        --exclude "linux/*.a" \
+        --exclude "linux/*.so" \
         --exclude "*.bin" \
         --exclude "*.exe" \
         --exclude "*.log" \
@@ -19,8 +19,10 @@ tar cvf - \
         --exclude "save" \
         --exclude "__pycache__" \
         --exclude "*_gerber" \
-        --exclude "*_backups" \
-        --exclude "HW/v3.0" \
+        --exclude "*-backups" \
+        --exclude "doc/ref/*" \
+        --exclude "doc/src/*" \
+        --exclude "FE_*" \
         ${PRG}/* |
 gzip > ${PRG}_${VER}.tar.gz
 

@@ -193,7 +193,8 @@ stream to the first output path. Capturing stops on the configured duration
 (`-t`), or by Ctrl-C. A `<path>.tag` companion file is written for each output,
 recording the IF format, sampling rate, LO frequencies, and per-CH sampling type
 / bit width so downstream tools (e.g. `pocket_trk`, `pocket_acq`) can
-auto-configure.
+auto-configure. It is written before the capture starts, so an output path that
+is a named pipe (FIFO) has its tag file ready for the program reading it.
 
 ### Options
 

@@ -17,6 +17,8 @@
 //  2024-04-28  1.6  support Pocket SDR FE 4CH
 //  2024-06-29  1.7  support API change in sdr_dev.c
 //  2024-07-02  1.8  support tag file output
+//  2026-10-27  1.8.1 write tag files before the data, so that a reader of
+//                    a pipe (FIFO) knows the format from the start
 //
 #include <signal.h>
 #ifdef WIN32
@@ -342,6 +344,9 @@ int main(int argc, char **argv)
             files[i] = path[i];
         }
     }
+    // before opening the files: opening a FIFO waits for its reader
+    write_tag_files(dump_time, raw, fmt, fs, fo, IQ, nch, files);
+    
     for (int i = 0; i < nfile; i++) {
         if (!files[i]) continue;
         if (!strcmp(files[i], "-")) {
@@ -365,8 +370,6 @@ int main(int argc, char **argv)
         if (fp[i]) fclose(fp[i]);
     }
     sdr_dev_close(dev);
-    
-    write_tag_files(dump_time, raw, fmt, fs, fo, IQ, nch, files);
     
     return 0;
 }
